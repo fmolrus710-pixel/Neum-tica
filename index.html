@@ -1,1 +1,1036 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simulador ISO 1219 - Neumática 4º ESO</title>
+<style>
+  :root {
+    --bg-dark: #0f172a;
+    --panel-bg: #1e293b;
+    --border-col: #334155;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --p-high: #ef4444;      /* Rojo: Aire a presión (Vía 1 / Trabajo activo) */
+    --p-exhaust: #38bdf8;   /* Azul claro: Escape / Sin presión (Vías 3, 5) */
+    --p-pilot: #f59e0b;     /* Ámbar: Señal de pilotaje (12, 14) */
+    --comp-stroke: #e2e8f0;
+    --comp-fill: #1e293b;
+    --accent: #3b82f6;
+    --success: #10b981;
+  }
 
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
+  body { background: var(--bg-dark); color: var(--text-main); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  /* Cabecera */
+  header {
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--border-col);
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .brand { display: flex; align-items: center; gap: 0.75rem; }
+  .brand h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: 0.5px; color: #fff; }
+  .badge { background: var(--accent); color: #fff; font-size: 0.75rem; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 600; }
+
+  .mode-switch { display: flex; gap: 0.5rem; background: var(--bg-dark); padding: 0.25rem; border-radius: 8px; border: 1px solid var(--border-col); }
+  .mode-btn {
+    background: transparent; color: var(--text-muted); border: none; padding: 0.5rem 1rem;
+    border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem; transition: 0.2s;
+  }
+  .mode-btn.active { background: var(--accent); color: #fff; }
+
+  /* Contenedor Principal */
+  .main-container { display: grid; grid-template-columns: 300px 1fr 310px; flex: 1; overflow: hidden; }
+
+  /* Paneles laterales */
+  .sidebar {
+    background: var(--panel-bg);
+    border-right: 1px solid var(--border-col);
+    padding: 1.25rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .sidebar-right { border-right: none; border-left: 1px solid var(--border-col); }
+
+  h2 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 0.25rem; }
+
+  .circuit-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .circuit-item {
+    background: var(--bg-dark); border: 1px solid var(--border-col); color: var(--text-main);
+    padding: 0.75rem; border-radius: 8px; cursor: pointer; text-align: left; transition: 0.15s;
+  }
+  .circuit-item:hover { border-color: var(--accent); }
+  .circuit-item.active { border-color: var(--accent); background: rgba(59, 130, 246, 0.15); }
+  .circuit-item .c-title { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.2rem; display: flex; justify-content: space-between; }
+  .circuit-item .c-desc { font-size: 0.78rem; color: var(--text-muted); line-height: 1.3; }
+
+  /* Lienzo Central SVG */
+  .canvas-area {
+    position: relative;
+    background: radial-gradient(circle at center, #1e293b 1px, transparent 1px), #0f172a;
+    background-size: 24px 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+  }
+
+  .top-hud {
+    padding: 0.75rem 1.25rem;
+    background: rgba(30, 41, 59, 0.85);
+    backdrop-filter: blur(4px);
+    border-bottom: 1px solid var(--border-col);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 5;
+  }
+  .legend { display: flex; gap: 1.25rem; font-size: 0.82rem; }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  #svgCanvas { width: 100%; height: 100%; flex: 1; user-select: none; }
+
+  /* Estilos de tuberías y animaciones en SVG */
+  .pipe { fill: none; stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; transition: stroke 0.15s; }
+  .pipe-exhaust { stroke: var(--p-exhaust); opacity: 0.75; }
+  .pipe-pressure { stroke: var(--p-high); stroke-dasharray: 8 5; animation: flowAnim 0.45s linear infinite; }
+  .pipe-pilot { stroke: var(--p-pilot); stroke-dasharray: 6 4; animation: flowAnim 0.45s linear infinite; }
+
+  @keyframes flowAnim { to { stroke-dashoffset: -13; } }
+
+  .valve-spool { transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1); }
+  .interactive-btn { cursor: pointer; }
+  .interactive-btn:hover rect, .interactive-btn:hover circle, .interactive-btn:hover path { filter: drop-shadow(0 0 6px var(--accent)); }
+
+  /* Controles en barra derecha */
+  .control-box {
+    background: var(--bg-dark); border: 1px solid var(--border-col);
+    padding: 0.9rem; border-radius: 8px; display: flex; flex-direction: column; gap: 0.65rem;
+  }
+  label { font-size: 0.82rem; color: var(--text-muted); display: flex; justify-content: space-between; }
+  select, input[type="range"] {
+    width: 100%; padding: 0.45rem; background: var(--panel-bg); color: #fff;
+    border: 1px solid var(--border-col); border-radius: 6px; font-size: 0.85rem;
+  }
+  .info-card {
+    background: rgba(59, 130, 246, 0.1); border-left: 3px solid var(--accent);
+    padding: 0.85rem; border-radius: 4px; font-size: 0.85rem; line-height: 1.45;
+  }
+  .challenge-box {
+    background: rgba(245, 158, 11, 0.12); border: 1px solid #f59e0b;
+    padding: 0.9rem; border-radius: 8px; display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  .btn-verify {
+    background: var(--success); color: #fff; border: none; padding: 0.65rem;
+    border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.9rem; transition: 0.2s;
+  }
+  .btn-verify:hover { filter: brightness(1.1); }
+  .feedback-msg { font-size: 0.85rem; font-weight: 600; padding: 0.5rem; border-radius: 6px; display: none; }
+
+  .iso-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.3rem; }
+  .iso-table th, .iso-table td { border: 1px solid var(--border-col); padding: 0.35rem 0.5rem; text-align: left; }
+  .iso-table th { background: var(--panel-bg); color: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>NEUMÁTICA INTERACTIVA · ISO 1219</h1>
+    <span class="badge">4º ESO · Tecnología</span>
+  </div>
+  <div class="mode-switch">
+    <button class="mode-btn active" id="btnModeLab" onclick="setAppMode('lab')">🔬 Modo Laboratorio</button>
+    <button class="mode-btn" id="btnModeChallenge" onclick="setAppMode('challenge')">🛠️ Retos de Taller (Averías/Diseño)</button>
+  </div>
+</header>
+
+<div class="main-container">
+  <!-- Panel Izquierdo: Selector de circuitos o retos -->
+  <aside class="sidebar">
+    <h2 id="leftPanelTitle">Circuitos de Laboratorio</h2>
+    <div class="circuit-list" id="circuitList"></div>
+  </aside>
+
+  <!-- Lienzo Central -->
+  <main class="canvas-area">
+    <div class="top-hud">
+      <div class="legend">
+        <div class="legend-item"><span class="dot" style="background:var(--p-high)"></span> Aire a presión (1, 2, 4)</div>
+        <div class="legend-item"><span class="dot" style="background:var(--p-pilot)"></span> Pilotaje activo (12, 14)</div>
+        <div class="legend-item"><span class="dot" style="background:var(--p-exhaust)"></span> Escape / Reposo (3, 5)</div>
+      </div>
+      <div style="font-size:0.82rem; color:var(--text-muted);">
+        💡 <strong>Haz clic sobre los pulsadores de las válvulas</strong> en el esquema para accionarlas
+      </div>
+    </div>
+
+    <svg id="svgCanvas" viewBox="0 0 900 560">
+      <defs>
+        <!-- Punta de flecha estándar para el interior de las casillas ISO -->
+        <marker id="isoArrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#e2e8f0"/>
+        </marker>
+        <marker id="isoArrowActive" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#ef4444"/>
+        </marker>
+      </defs>
+      <g id="sceneRoot"></g>
+    </svg>
+  </main>
+
+  <!-- Panel Derecho: Parámetros y Explicación Didáctica -->
+  <aside class="sidebar sidebar-right">
+    <h2>Explicación del Montaje</h2>
+    <div class="info-card" id="circuitExplanation"></div>
+
+    <!-- Caja exclusiva para Modo Retos -->
+    <div class="challenge-box" id="challengeControls" style="display:none;">
+      <strong style="color:#f59e0b; font-size:0.9rem;">🎯 Pieza en la ranura [ ? ]:</strong>
+      <label for="slotSelect">Selecciona el componente adecuado:</label>
+      <select id="slotSelect" onchange="updateChallengeSlot(this.value)"></select>
+      <button class="btn-verify" onclick="verifyChallenge()">Comprobar Funcionamiento</button>
+      <div class="feedback-msg" id="challengeFeedback"></div>
+    </div>
+
+    <!-- Controles de configuración del laboratorio -->
+    <div class="control-box" id="labControls">
+      <strong style="font-size:0.88rem;">⚙️ Configurar Componentes</strong>
+      <div>
+        <label>Accionamiento Válvula(s) 3/2:</label>
+        <select id="actuatorTypeSelect" onchange="changeActuatorType(this.value)">
+          <option value="push">Pulsador manual (Sin retención)</option>
+          <option value="lever">Palanca con enclavamiento (Interruptor)</option>
+          <option value="roller">Rodillo mecánico (Final de carrera)</option>
+        </select>
+      </div>
+      <div id="throttleControlContainer">
+        <label>
+          <span>Apertura Estranguladora:</span>
+          <strong id="throttleValLabel">50%</strong>
+        </label>
+        <input type="range" id="throttleSlider" min="10" max="100" step="5" value="50" oninput="changeThrottle(this.value)">
+      </div>
+    </div>
+
+    <div class="control-box">
+      <strong style="font-size:0.85rem;">📊 Estado del Cilindro</strong>
+      <label>Carrera del vástago: <strong id="cylPosLabel" style="color:#fff;">0%</strong></label>
+      <label>Cámara posterior: <strong id="chamberBackLabel">Escape (3/5)</strong></label>
+      <label>Cámara anterior: <strong id="chamberFrontLabel">Muelle / N/A</strong></label>
+    </div>
+
+    <div class="control-box">
+      <strong style="font-size:0.85rem;">📐 Nomenclatura Numérica ISO 1219</strong>
+      <table class="iso-table">
+        <tr><th>Vía</th><th>Significado</th></tr>
+        <tr><td><strong>1</strong></td><td>Alimentación de presión (Compresor)</td></tr>
+        <tr><td><strong>2, 4</strong></td><td>Vías de trabajo (Hacia el cilindro)</td></tr>
+        <tr><td><strong>3, 5</strong></td><td>Vías de escape a la atmósfera</td></tr>
+        <tr><td><strong>12, 14</strong></td><td>Señales de pilotaje neumático</td></tr>
+      </table>
+    </div>
+  </aside>
+</div>
+
+<script>
+// ============================================================================
+// ESTADO GLOBAL DEL SIMULADOR
+// ============================================================================
+let appMode = 'lab'; // 'lab' o 'challenge'
+let currentId = 'c1';
+
+let state = {
+  v1: false,           // Estado accionamiento válvula 3/2 izquierda o única
+  v2: false,           // Estado accionamiento válvula 3/2 derecha
+  spool52: 0,          // Estado válvula 5/2: 0 (reposo: 1->2, 4->5), 1 (activa: 1->4, 2->3)
+  cylPos: 0,           // Posición del vástago (0.0 a 1.0)
+  actuatorType: 'push',// 'push', 'lever', 'roller'
+  throttle: 50,        // % apertura regulador de velocidad (10 a 100)
+  challengeSelection: '' // Opción elegida por el alumno en modo reto
+};
+
+// Catálogo de Circuitos de Laboratorio
+const LAB_CIRCUITS = [
+  {
+    id: 'c1',
+    title: '1. Mando Directo (CSE)',
+    badge: '3/2 NC',
+    desc: 'Cilindro de simple efecto gobernado por una válvula 3/2 normalmente cerrada.',
+    hasThrottle: false,
+    explanation: 'En reposo, el muelle mantiene la casilla derecha conectada: la <strong>vía 1 (presión) está bloqueada</strong> y la <strong>vía 2 se vacía por el escape 3</strong>. Al accionar el pulsador, las casillas se deslizan a la derecha, comunicando <strong>1 con 2</strong> y haciendo avanzar el vástago.'
+  },
+  {
+    id: 'c2',
+    title: '2. Función Lógica OR (Selectora)',
+    badge: 'OR + CSE',
+    desc: 'Accionamiento de un cilindro desde dos puntos distintos (puerta de autobús).',
+    hasThrottle: false,
+    explanation: 'La <strong>válvula selectora de circuito (OR)</strong> tiene una bola interna que tapona la entrada sin presión y deja pasar el aire si activas la válvula <strong>V1 O la válvula V2</strong> (o ambas).'
+  },
+  {
+    id: 'c3',
+    title: '3. Función Lógica AND (Simultaneidad)',
+    badge: 'AND + CSE',
+    desc: 'Mando bimanual de seguridad: requiere pulsar ambas válvulas a la vez.',
+    hasThrottle: false,
+    explanation: 'La <strong>válvula de simultaneidad (AND)</strong> bloquea el paso si solo llega aire por un lado (el émbolo interno tapona esa misma entrada). Solo hay salida hacia el cilindro cuando hay presión simultánea en <strong>V1 Y V2</strong>.'
+  },
+  {
+    id: 'c4',
+    title: '4. Cilindro Doble Efecto (Monoestable)',
+    badge: '5/2 + CDE',
+    desc: 'Control de un cilindro de doble efecto mediante una válvula 5/2 con retorno por muelle.',
+    hasThrottle: false,
+    explanation: 'Un cilindro de doble efecto tiene dos cámaras. En reposo, la válvula 5/2 inyecta aire de <strong>1 hacia 2</strong> (manteniendo el vástago retraído) y vacía la cámara posterior de <strong>4 hacia 5</strong>. Al activar la válvula, el aire pasa de <strong>1 a 4</strong> y la cámara delantera escapa de <strong>2 a 3</strong>.'
+  },
+  {
+    id: 'c5',
+    title: '5. Mando Indirecto Biestable + Regulador',
+    badge: '5/2 Pilotada',
+    desc: 'Válvula 5/2 biestable (con memoria) pilotada por señales 14 y 12 y estranguladora.',
+    hasThrottle: true,
+    explanation: 'La válvula 5/2 biestable actúa como <strong>memoria neumática</strong>: un toque en V1 envía señal al pilotaje <strong>14</strong> (conmuta de 1 a 4 y el cilindro avanza aunque sueltes V1). Solo retrocede al pulsar V2 (pilotaje <strong>12</strong>). La <strong>válvula estranguladora unidireccional</strong> regula la velocidad de salida estrangulando el aire que escapa de la cámara delantera.'
+  },
+  {
+    id: 'c6',
+    title: '6. Prensa Industrial Completa',
+    badge: 'AND + 5/2 + Reg.',
+    desc: 'Circuito combinado con seguridad bimanual (AND), pilotaje 5/2 y control de velocidad.',
+    hasThrottle: true,
+    explanation: 'Para que la prensa baje (pilotaje <strong>14</strong>), el operario debe mantener ambas manos en <strong>V1 y V2</strong> (válvula de simultaneidad AND). La bajada se realiza a velocidad controlada gracias al regulador unidireccional. La subida se ordena con el pulsador de retorno <strong>V3 (pilotaje 12)</strong>.'
+  }
+];
+
+// Catálogo de Retos de Taller
+const CHALLENGES = [
+  {
+    id: 'r1',
+    title: 'Reto 1: Estampadora de Seguridad',
+    badge: 'Seguridad',
+    desc: 'Evita accidentes: el cilindro solo debe bajar si el operario pulsa V1 y V2 a la vez.',
+    baseCircuit: 'c3',
+    correctOption: 'and',
+    options: [
+      { value: 'pipe', label: 'Te de empalme directo (Sin válvula)' },
+      { value: 'or', label: 'Válvula Selectora de Circuito (OR)' },
+      { value: 'and', label: 'Válvula de Simultaneidad (AND)' }
+    ],
+    explanation: '<strong>Problema de taller:</strong> En una estampadora industrial, si usamos una válvula OR el operario podría accionar la máquina con una mano mientras tiene la otra bajo la prensa. Selecciona la válvula lógica correcta en la ranura <strong>[ ? ]</strong> y pruébala.'
+  },
+  {
+    id: 'r2',
+    title: 'Reto 2: Apertura de Puerta desde 2 Puntos',
+    badge: 'Accesos',
+    desc: 'La puerta del taller debe abrirse al pulsar el botón interior (V1) o el exterior (V2).',
+    baseCircuit: 'c2',
+    correctOption: 'or',
+    options: [
+      { value: 'and', label: 'Válvula de Simultaneidad (AND)' },
+      { value: 'or', label: 'Válvula Selectora de Circuito (OR)' },
+      { value: 'blocked', label: 'Tapón ciego de bloqueo' }
+    ],
+    explanation: '<strong>Problema de taller:</strong> Necesitamos que el cilindro de simple efecto avance tanto si pulsamos V1 desde dentro como si pulsamos V2 desde fuera, evitando que el aire se escape por la válvula que está en reposo.'
+  },
+  {
+    id: 'r3',
+    title: 'Reto 3: Cilindro que sale solo al encender',
+    badge: 'Avería 3/2',
+    desc: 'Un alumno montó una válvula 3/2 Normalmente Abierta (NA) por error y el cilindro sale sin tocar nada.',
+    baseCircuit: 'c1',
+    correctOption: '32nc',
+    options: [
+      { value: '32na', label: 'Válvula 3/2 Normalmente Abierta (NA)' },
+      { value: '32nc', label: 'Válvula 3/2 Normalmente Cerrada (NC)' }
+    ],
+    explanation: '<strong>Diagnóstico de avería:</strong> Fíjate en la posición de reposo (conectada al muelle). En una <strong>3/2 NA</strong>, la vía 1 ya está unida con la 2 sin pulsar nada. Cámbiala por la válvula adecuada para que el cilindro permanezca retraído en reposo.'
+  },
+  {
+    id: 'r4',
+    title: 'Reto 4: Memoria Neumática en Doble Efecto',
+    badge: 'Pilotaje 5/2',
+    desc: 'Queremos que con un solo toque en V1 el cilindro avance hasta el final y se quede fuera hasta pulsar V2.',
+    baseCircuit: 'c5',
+    correctOption: '52bi',
+    options: [
+      { value: '52mono', label: 'Válvula 5/2 Monoestable (Retorno por muelle en 12)' },
+      { value: '52bi', label: 'Válvula 5/2 Biestable (Pilotajes neumáticos 14 y 12)' }
+    ],
+    explanation: '<strong>Problema de diseño:</strong> Si colocamos una válvula 5/2 con muelle (monoestable), en cuanto soltemos el pulsador de marcha V1 el cilindro regresará solo. Necesitamos una distribuidora con memoria.'
+  }
+];
+
+// ============================================================================
+// INICIALIZACIÓN Y GESTIÓN DE INTERFAZ
+// ============================================================================
+function init() {
+  renderSidebarList();
+  selectItem('c1');
+  requestAnimationFrame(simulationLoop);
+}
+
+function setAppMode(mode) {
+  appMode = mode;
+  document.getElementById('btnModeLab').classList.toggle('active', mode === 'lab');
+  document.getElementById('btnModeChallenge').classList.toggle('active', mode === 'challenge');
+  document.getElementById('leftPanelTitle').textContent = mode === 'lab' ? 'Circuitos de Laboratorio' : 'Retos de Taller';
+  document.getElementById('challengeControls').style.display = mode === 'challenge' ? 'flex' : 'none';
+
+  renderSidebarList();
+  selectItem(mode === 'lab' ? 'c1' : 'r1');
+}
+
+function renderSidebarList() {
+  const listEl = document.getElementById('circuitList');
+  listEl.innerHTML = '';
+  const items = appMode === 'lab' ? LAB_CIRCUITS : CHALLENGES;
+
+  items.forEach(item => {
+    const btn = document.createElement('button');
+    btn.className = `circuit-item ${item.id === currentId ? 'active' : ''}`;
+    btn.onclick = () => selectItem(item.id);
+    btn.innerHTML = `
+      <div class="c-title"><span>${item.title}</span><span class="badge">${item.badge}</span></div>
+      <div class="c-desc">${item.desc}</div>
+    `;
+    listEl.appendChild(btn);
+  });
+}
+
+function selectItem(id) {
+  currentId = id;
+  state.v1 = false;
+  state.v2 = false;
+  state.v3 = false;
+  state.spool52 = 0;
+  state.cylPos = 0;
+
+  renderSidebarList();
+  const feedbackEl = document.getElementById('challengeFeedback');
+  feedbackEl.style.display = 'none';
+
+  if (appMode === 'lab') {
+    const item = LAB_CIRCUITS.find(c => c.id === id);
+    document.getElementById('circuitExplanation').innerHTML = item.explanation;
+    document.getElementById('throttleControlContainer').style.display = item.hasThrottle ? 'block' : 'none';
+  } else {
+    const ch = CHALLENGES.find(c => c.id === id);
+    document.getElementById('circuitExplanation').innerHTML = ch.explanation;
+    document.getElementById('throttleControlContainer').style.display = (ch.baseCircuit === 'c5') ? 'block' : 'none';
+
+    const selectEl = document.getElementById('slotSelect');
+    selectEl.innerHTML = ch.options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+    state.challengeSelection = ch.options[0].value;
+  }
+
+  renderScene();
+}
+
+function changeActuatorType(val) {
+  state.actuatorType = val;
+  state.v1 = false;
+  state.v2 = false;
+  state.v3 = false;
+  renderScene();
+}
+
+function changeThrottle(val) {
+  state.throttle = parseInt(val, 10);
+  document.getElementById('throttleValLabel').textContent = `${val}%`;
+  renderScene();
+}
+
+function updateChallengeSlot(val) {
+  state.challengeSelection = val;
+  state.v1 = false;
+  state.v2 = false;
+  state.spool52 = 0;
+  document.getElementById('challengeFeedback').style.display = 'none';
+  renderScene();
+}
+
+function verifyChallenge() {
+  const ch = CHALLENGES.find(c => c.id === currentId);
+  const fb = document.getElementById('challengeFeedback');
+  fb.style.display = 'block';
+  if (state.challengeSelection === ch.correctOption) {
+    fb.style.background = 'rgba(16, 185, 129, 0.2)';
+    fb.style.color = '#34d399';
+    fb.textContent = '✅ ¡Correcto! El componente cumple la función normativa ISO 1219 requerida. Acciona las válvulas para verificar el movimiento.';
+  } else {
+    fb.style.background = 'rgba(239, 68, 68, 0.2)';
+    fb.style.color = '#f87171';
+    fb.textContent = '❌ Incorrecto. Prueba el circuito en pantalla y observa por qué falla el comportamiento físico.';
+  }
+}
+
+// ============================================================================
+// MOTOR LÓGICO Y FÍSICO DE NEUMÁTICA (60 FPS)
+// ============================================================================
+function getEffectiveCircuitId() {
+  if (appMode === 'lab') return currentId;
+  const ch = CHALLENGES.find(c => c.id === currentId);
+  return ch ? ch.baseCircuit : 'c1';
+}
+
+function evaluatePneumatics() {
+  const cid = getEffectiveCircuitId();
+  let pV1 = state.v1;
+  let pV2 = state.v2;
+  let pV3 = state.v3 || false;
+
+  // Caso especial Reto 3: Válvula 3/2 Normalmente Abierta (invierte la señal)
+  if (appMode === 'challenge' && currentId === 'r3' && state.challengeSelection === '32na') {
+    pV1 = !state.v1;
+  }
+
+  let pWork4 = false; // Presión hacia cámara posterior (avance)
+  let pWork2 = false; // Presión hacia cámara anterior (retroceso en CDE)
+  let pLogicOut = false;
+
+  if (cid === 'c1') {
+    pWork4 = pV1;
+  } else if (cid === 'c2' || cid === 'c3') {
+    let logicType = (cid === 'c2') ? 'or' : 'and';
+    if (appMode === 'challenge' && (currentId === 'r1' || currentId === 'r2')) {
+      logicType = state.challengeSelection;
+    }
+    if (logicType === 'or' || logicType === 'pipe') {
+      pLogicOut = pV1 || pV2;
+    } else if (logicType === 'and') {
+      pLogicOut = pV1 && pV2;
+    } else {
+      pLogicOut = false;
+    }
+    pWork4 = pLogicOut;
+  } else if (cid === 'c4') {
+    state.spool52 = pV1 ? 1 : 0;
+    pWork4 = (state.spool52 === 1);
+    pWork2 = (state.spool52 === 0);
+  } else if (cid === 'c5') {
+    const isMono = (appMode === 'challenge' && currentId === 'r4' && state.challengeSelection === '52mono');
+    if (isMono) {
+      state.spool52 = pV1 ? 1 : 0;
+    } else {
+      if (pV1 && !pV2) state.spool52 = 1;
+      if (pV2 && !pV1) state.spool52 = 0;
+    }
+    pWork4 = (state.spool52 === 1);
+    pWork2 = (state.spool52 === 0);
+  } else if (cid === 'c6') {
+    pLogicOut = pV1 && pV2;
+    if (pLogicOut && !pV3) state.spool52 = 1;
+    if (pV3 && !pLogicOut) state.spool52 = 0;
+    pWork4 = (state.spool52 === 1);
+    pWork2 = (state.spool52 === 0);
+  }
+
+  return { cid, pV1, pV2, pV3, pLogicOut, pWork4, pWork2 };
+}
+
+function simulationLoop() {
+  const net = evaluatePneumatics();
+  const baseSpeed = 0.022;
+  const hasRegulator = (net.cid === 'c5' || net.cid === 'c6');
+  const advanceSpeed = hasRegulator ? baseSpeed * (state.throttle / 100) : baseSpeed;
+
+  if (net.pWork4 && !net.pWork2) {
+    state.cylPos = Math.min(1, state.cylPos + advanceSpeed);
+  } else if (!net.pWork4) {
+    // En CSE retrocede por muelle; en CDE retrocede por presión en vía 2
+    state.cylPos = Math.max(0, state.cylPos - baseSpeed);
+  }
+
+  updateDynamicSVG(net);
+  requestAnimationFrame(simulationLoop);
+}
+
+// ============================================================================
+// GENERADOR DE SÍMBOLOS NORMALIZADOS ISO 1219 EN SVG
+// ============================================================================
+
+// Dibuja fuente de presión (triángulo ISO) y escape (triángulo invertido)
+function svgSource(x, y) {
+  return `<g transform="translate(${x},${y})">
+    <polygon points="0,0 -7,12 7,12" fill="none" stroke="#ef4444" stroke-width="2"/>
+    <circle cx="0" cy="7" r="1.5" fill="#ef4444"/>
+  </g>`;
+}
+
+function svgExhaust(x, y) {
+  return `<g transform="translate(${x},${y})">
+    <polygon points="0,10 -6,0 6,0" fill="none" stroke="#38bdf8" stroke-width="1.8"/>
+  </g>`;
+}
+
+// Unidad de mantenimiento FRL (Filtro, Regulador, Lubricador simplificado ISO)
+function svgFRL(x, y) {
+  return `<g transform="translate(${x},${y})">
+    <line x1="0" y1="35" x2="0" y2="20" class="pipe pipe-pressure"/>
+    ${svgSource(0, 35)}
+    <polygon points="0,-20 22,0 0,20 -22,0" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+    <line x1="-22" y1="0" x2="22" y2="0" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3 2"/>
+    <line x1="0" y1="-20" x2="0" y2="20" stroke="#94a3b8" stroke-width="1.2"/>
+    <circle cx="14" cy="-14" r="6" fill="#0f172a" stroke="#e2e8f0" stroke-width="1.5"/>
+    <line x1="11" y1="-11" x2="17" y2="-17" stroke="#ef4444" stroke-width="1.5"/>
+    <text x="-32" y="4" fill="#94a3b8" font-size="11" font-weight="bold" text-anchor="end">Unidad FRL</text>
+  </g>`;
+}
+
+// Válvula 3/2 Normalmente Cerrada (o NA en el Reto 3) con deslizamiento real de casillas
+function svgValve32(idKey, x, y, label, isNA = false) {
+  // Cada casilla mide 44x44. En reposo (active=false), la casilla DERECHA está alineada con las tuberías (x, y).
+  // Al pulsar (active=true), el bloque de 2 casillas se desplaza +44px a la derecha para alinear la casilla IZQUIERDA.
+  const actType = state.actuatorType;
+  let actuatorSVG = '';
+  if (actType === 'push') {
+    actuatorSVG = `
+      <line x1="-88" y1="-8" x2="-108" y2="-8" stroke="#e2e8f0" stroke-width="2.5"/>
+      <line x1="-88" y1="8" x2="-108" y2="8" stroke="#e2e8f0" stroke-width="2.5"/>
+      <path d="M -108,-16 L -108,16 C -120,16 -120,-16 -108,-16 Z" fill="#3b82f6" stroke="#e2e8f0" stroke-width="2"/>
+    `;
+  } else if (actType === 'lever') {
+    actuatorSVG = `
+      <line x1="-88" y1="0" x2="-108" y2="0" stroke="#e2e8f0" stroke-width="2.5"/>
+      <polyline points="-102,0 -97,-7 -92,0" fill="none" stroke="#f59e0b" stroke-width="2"/>
+      <line x1="-108" y1="12" x2="-118" y2="-18" stroke="#e2e8f0" stroke-width="3"/>
+      <circle cx="-118" cy="-18" r="5" fill="#f59e0b"/>
+    `;
+  } else {
+    actuatorSVG = `
+      <line x1="-88" y1="-5" x2="-110" y2="-5" stroke="#e2e8f0" stroke-width="2"/>
+      <line x1="-88" y1="5" x2="-110" y2="5" stroke="#e2e8f0" stroke-width="2"/>
+      <circle cx="-116" cy="0" r="8" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+      <circle cx="-116" cy="0" r="3" fill="#38bdf8"/>
+    `;
+  }
+
+  // Contenido interno de casilla izquierda (accionada) y derecha (reposo)
+  const leftBoxContent = isNA ? `
+    <!-- Tapón en vía 1 (-12, +22) y escape 2->3 (+12, -22 a +12, +22) -->
+    <line x1="-56" y1="22" x2="-56" y2="10" stroke="#e2e8f0" stroke-width="2"/>
+    <line x1="-62" y1="10" x2="-50" y2="10" stroke="#e2e8f0" stroke-width="2"/>
+    <line x1="-32" y1="-22" x2="-32" y2="18" stroke="#e2e8f0" stroke-width="2" marker-end="url(#isoArrow)"/>
+  ` : `
+    <!-- Paso de 1 (-56, +22) hacia 2 (-32, -22) y tapón en 3 (-32, +22) -->
+    <line x1="-56" y1="22" x2="-32" y2="-18" stroke="#e2e8f0" stroke-width="2.2" marker-end="url(#isoArrow)"/>
+    <line x1="-32" y1="22" x2="-32" y2="12" stroke="#e2e8f0" stroke-width="2"/>
+    <line x1="-38" y1="12" x2="-26" y2="12" stroke="#e2e8f0" stroke-width="2"/>
+  `;
+
+  const rightBoxContent = isNA ? `
+    <!-- Paso de 1 (-12, +22) hacia 2 (+12, -22) en reposo -->
+    <line x1="-12" y1="22" x2="12" y2="-18" stroke="#e2e8f0" stroke-width="2.2" marker-end="url(#isoArrow)"/>
+    <line x1="12" y1="22" x2="12" y2="12" stroke="#e2e8f0" stroke-width="2"/>
+    <line x1="6" y1="12" x2="18" y2="12" stroke="#e2e8f0" stroke-width="2"/>
+  ` : `
+    <!-- Reposo NC: Vía 1 (-12, +22) bloqueada, Vía 2 (+12, -22) escapa hacia 3 (+12, +22) -->
+    <line x1="-12" y1="22" x2="-12" y2="10" stroke="#e2e8f0" stroke-width="2"/>
+    <line x1="-18" y1="10" x2="-6" y2="10" stroke="#e2e8f0" stroke-width="2"/>
+    <line x1="12" y1="-22" x2="12" y2="18" stroke="#e2e8f0" stroke-width="2.2" marker-end="url(#isoArrow)"/>
+  `;
+
+  return `
+  <g transform="translate(${x},${y})">
+    <!-- Etiqueta superior -->
+    <text x="-75" y="-32" fill="#f8fafc" font-size="12" font-weight="bold">${label}</text>
+
+    <!-- Puertos FIJOS en el espacio: 2 arriba (+12, -22), 1 abajo izq (-12, +22), 3 abajo der (+12, +22) -->
+    <text x="19" y="-27" fill="#cbd5e1" font-size="11" font-weight="bold">2</text>
+    <text x="-24" y="36" fill="#cbd5e1" font-size="11" font-weight="bold">1</text>
+    <text x="20" y="36" fill="#cbd5e1" font-size="11" font-weight="bold">3</text>
+    ${svgSource(-12, 24)}
+    ${svgExhaust(12, 24)}
+
+    <!-- Grupo móvil (Corredera + Accionamiento + Muelle) -->
+    <g id="spool_${idKey}" class="valve-spool interactive-btn"
+       onmousedown="handleValvePress('${idKey}', true)"
+       onmouseup="handleValvePress('${idKey}', false)"
+       ontouchstart="handleValvePress('${idKey}', true)"
+       ontouchend="handleValvePress('${idKey}', false)">
+      <!-- Casilla Izquierda (Activa): de x=-66 a x=-22 -->
+      <rect x="-66" y="-22" width="44" height="44" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+      <!-- Casilla Derecha (Reposo): de x=-22 a x=+22 -->
+      <rect x="-22" y="-22" width="44" height="44" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+
+      ${leftBoxContent}
+      ${rightBoxContent}
+
+      <!-- Accionamiento izquierdo solidario a la casilla -->
+      <g transform="translate(22, 0)">
+        ${actuatorSVG}
+      </g>
+
+      <!-- Muelle de retorno derecho -->
+      <polyline points="22,0 26,-9 31,9 36,-9 41,9 46,0" fill="none" stroke="#94a3b8" stroke-width="2"/>
+    </g>
+  </g>`;
+}
+
+// Válvula Distribuidora 5/2 (Biestable 14/12 o Monoestable)
+function svgValve52(x, y, isMono = false) {
+  // Puertos fijos:
+  // Arriba: 4 en x=-16, 2 en x=+16 (y=-24)
+  // Abajo: 5 en x=-24, 1 en x=0, 3 en x=+24 (y=+24)
+  // Casilla Derecha (Reposo, spool52=0): centrada en x=0 (de -32 a +32)
+  // Casilla Izquierda (Activa, spool52=1): centrada en x=-64 (de -96 a -32). Al activarse se desplaza +64px.
+  const rightSideControl = isMono ? `
+    <polyline points="32,0 38,-10 44,10 50,-10 56,10 62,0" fill="none" stroke="#94a3b8" stroke-width="2.2"/>
+  ` : `
+    <polygon points="32,-12 48,0 32,12" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+    <text x="42" y="-15" fill="#f59e0b" font-size="11" font-weight="bold">12</text>
+  `;
+
+  return `
+  <g transform="translate(${x},${y})">
+    <text x="0" y="-42" fill="#f8fafc" font-size="12" font-weight="bold" text-anchor="middle">
+      Válvula Distribuidora 5/2 ${isMono ? '(Monoestable)' : '(Biestable)'}
+    </text>
+
+    <!-- Numeración fija ISO 1219 -->
+    <text x="-28" y="-29" fill="#cbd5e1" font-size="11" font-weight="bold">4</text>
+    <text x="20" y="-29" fill="#cbd5e1" font-size="11" font-weight="bold">2</text>
+    <text x="-36" y="38" fill="#cbd5e1" font-size="11" font-weight="bold">5</text>
+    <text x="-11" y="38" fill="#cbd5e1" font-size="11" font-weight="bold">1</text>
+    <text x="30" y="38" fill="#cbd5e1" font-size="11" font-weight="bold">3</text>
+
+    ${svgExhaust(-24, 26)}
+    ${svgSource(0, 26)}
+    ${svgExhaust(24, 26)}
+
+    <!-- Corredera móvil 5/2 -->
+    <g id="spool_52" class="valve-spool">
+      <!-- Casilla Izquierda (Estado 1: 1->4, 2->3, 5 tapado) de x=-96 a -32 -->
+      <rect x="-96" y="-24" width="64" height="48" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+      <!-- 1 (-64, +24) -> 4 (-80, -24) -->
+      <line x1="-64" y1="24" x2="-80" y2="-20" stroke="#e2e8f0" stroke-width="2.2" marker-end="url(#isoArrow)"/>
+      <!-- 2 (-48, -24) -> 3 (-40, +24) -->
+      <line x1="-48" y1="-24" x2="-40" y2="20" stroke="#e2e8f0" stroke-width="2.2" marker-end="url(#isoArrow)"/>
+      <!-- 5 (-88, +24) tapado -->
+      <line x1="-88" y1="24" x2="-88" y2="14" stroke="#e2e8f0" stroke-width="2"/>
+      <line x1="-93" y1="14" x2="-83" y2="14" stroke="#e2e8f0" stroke-width="2"/>
+
+      <!-- Casilla Derecha (Estado 0: 1->2, 4->5, 3 tapado) de x=-32 a +32 -->
+      <rect x="-32" y="-24" width="64" height="48" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+      <!-- 1 (0, +24) -> 2 (+16, -24) -->
+      <line x1="0" y1="24" x2="16" y2="-20" stroke="#e2e8f0" stroke-width="2.2" marker-end="url(#isoArrow)"/>
+      <!-- 4 (-16, -24) -> 5 (-24, +24) -->
+      <line x1="-16" y1="-24" x2="-24" y2="20" stroke="#e2e8f0" stroke-width="2.2" marker-end="url(#isoArrow)"/>
+      <!-- 3 (+24, +24) tapado -->
+      <line x1="24" y1="24" x2="24" y2="14" stroke="#e2e8f0" stroke-width="2"/>
+      <line x1="19" y1="14" x2="29" y2="14" stroke="#e2e8f0" stroke-width="2"/>
+
+      <!-- Pilotaje 14 en extremo izquierdo (-96) -->
+      <polygon points="-96,-12 -112,0 -96,12" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+      <text x="-115" y="-15" fill="#f59e0b" font-size="11" font-weight="bold">14</text>
+
+      <!-- Extremo derecho (Pilotaje 12 o Muelle) -->
+      ${rightSideControl}
+    </g>
+  </g>`;
+}
+
+// Válvula Selectora (OR) o de Simultaneidad (AND)
+function svgLogicValve(type, x, y) {
+  // Entradas izq (-45, 0) y der (+45, 0), salida arriba (0, -24)
+  if (type === 'pipe') {
+    return `<g transform="translate(${x},${y})">
+      <circle cx="0" cy="0" r="5" fill="#e2e8f0"/>
+      <text x="0" y="25" fill="#f59e0b" font-size="11" font-weight="bold" text-anchor="middle">[ Empalme Directo ]</text>
+    </g>`;
+  }
+  if (type === 'blocked') {
+    return `<g transform="translate(${x},${y})">
+      <rect x="-30" y="-15" width="60" height="30" fill="#1e293b" stroke="#ef4444" stroke-width="2"/>
+      <text x="0" y="5" fill="#ef4444" font-size="11" font-weight="bold" text-anchor="middle">BLOQUEO</text>
+    </g>`;
+  }
+
+  const isOR = (type === 'or');
+  return `<g transform="translate(${x},${y})">
+    <rect x="-45" y="-22" width="90" height="44" rx="4" fill="#1e293b" stroke="#e2e8f0" stroke-width="2"/>
+    <text x="-52" y="14" fill="#cbd5e1" font-size="11" font-weight="bold">1</text>
+    <text x="48" y="14" fill="#cbd5e1" font-size="11" font-weight="bold">1</text>
+    <text x="8" y="-26" fill="#cbd5e1" font-size="11" font-weight="bold">2</text>
+    ${isOR ? `
+      <!-- Asientos cónicos de selectora OR + bola móvil -->
+      <polyline points="-32,-12 -20,0 -32,12" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+      <polyline points="32,-12 20,0 32,12" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+      <line x1="-45" y1="0" x2="45" y2="0" stroke="#64748b" stroke-width="1.5" stroke-dasharray="3 2"/>
+      <line x1="0" y1="0" x2="0" y2="-22" stroke="#e2e8f0" stroke-width="2"/>
+      <circle id="logicShuttle" cx="0" cy="0" r="8" fill="#f59e0b" stroke="#fff" stroke-width="1.5"/>
+      <text x="0" y="36" fill="#94a3b8" font-size="11" font-weight="bold" text-anchor="middle">Selectora (OR)</text>
+    ` : `
+      <!-- Barras en T de simultaneidad AND + corredera interna -->
+      <line x1="-34" y1="-12" x2="-34" y2="12" stroke="#e2e8f0" stroke-width="2"/>
+      <line x1="34" y1="-12" x2="34" y2="12" stroke="#e2e8f0" stroke-width="2"/>
+      <line x1="0" y1="-8" x2="0" y2="-22" stroke="#e2e8f0" stroke-width="2"/>
+      <g id="logicShuttle">
+        <line x1="-18" y1="-10" x2="-18" y2="10" stroke="#f59e0b" stroke-width="3"/>
+        <line x1="18" y1="-10" x2="18" y2="10" stroke="#f59e0b" stroke-width="3"/>
+        <line x1="-18" y1="0" x2="18" y2="0" stroke="#f59e0b" stroke-width="3"/>
+      </g>
+      <text x="0" y="36" fill="#94a3b8" font-size="11" font-weight="bold" text-anchor="middle">Simultaneidad (AND)</text>
+    `}
+  </g>`;
+}
+
+// Válvula Estranguladora Unidireccional (Regulador de velocidad)
+function svgThrottleValve(x, y) {
+  return `<g transform="translate(${x},${y})">
+    <rect x="-28" y="-34" width="56" height="68" rx="4" fill="#1e293b" stroke="#e2e8f0" stroke-width="1.8"/>
+    <!-- Vía central con estrangulamiento -->
+    <line x1="-10" y1="34" x2="-10" y2="-34" stroke="#e2e8f0" stroke-width="2"/>
+    <path d="M -18,-12 Q -10,0 -18,12" fill="none" stroke="#f59e0b" stroke-width="2"/>
+    <path d="M -2,-12 Q -10,0 -2,12" fill="none" stroke="#f59e0b" stroke-width="2"/>
+    <line x1="-22" y1="14" x2="4" y2="-14" stroke="#f59e0b" stroke-width="1.8" marker-end="url(#isoArrow)"/>
+    <!-- Derivación con antirretorno -->
+    <polyline points="-10,22 14,22 14,-22 -10,-22" fill="none" stroke="#e2e8f0" stroke-width="1.8"/>
+    <polyline points="7,-4 14,4 21,-4" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+    <circle cx="14" cy="-2" r="4.5" fill="#38bdf8"/>
+    <text x="36" y="4" fill="#f59e0b" font-size="11" font-weight="bold">${state.throttle}%</text>
+  </g>`;
+}
+
+// Cilindro de Simple Efecto (CSE) o Doble Efecto (CDE)
+function svgCylinder(isDouble, x, y) {
+  // Camisa de 200px de ancho y 64px de alto. Entrada posterior en (x+16, y+32), anterior en (x+184, y+32)
+  return `<g transform="translate(${x},${y})">
+    <text x="100" y="-44" fill="#f8fafc" font-size="13" font-weight="bold" text-anchor="middle">
+      ${isDouble ? 'Cilindro de Doble Efecto (CDE)' : 'Cilindro de Simple Efecto (CSE)'}
+    </text>
+
+    <!-- Sombras dinámicas de presión dentro de las cámaras -->
+    <rect id="cylChamberBack" x="2" y="-30" width="20" height="60" fill="#ef4444" opacity="0.25"/>
+    <rect id="cylChamberFront" x="22" y="-30" width="176" height="60" fill="#38bdf8" opacity="0.15"/>
+
+    <!-- Cuerpo del cilindro -->
+    <rect x="0" y="-32" width="200" height="64" fill="none" stroke="#e2e8f0" stroke-width="3"/>
+
+    <!-- Muelle de retorno si es de Simple Efecto -->
+    ${!isDouble ? `<path id="cylSpring" d="" fill="none" stroke="#94a3b8" stroke-width="2.5"/>` : ''}
+
+    <!-- Conjunto Émbolo + Vástago -->
+    <g id="cylPistonGroup">
+      <rect x="20" y="-30" width="12" height="60" fill="#cbd5e1" stroke="#0f172a" stroke-width="1.5"/>
+      <rect x="32" y="-8" width="195" height="16" fill="#94a3b8" stroke="#0f172a" stroke-width="1.5"/>
+      <rect x="227" y="-18" width="8" height="36" rx="2" fill="#f59e0b"/>
+    </g>
+
+    <!-- Tomas de aire inferiores -->
+    <line x1="16" y1="32" x2="16" y2="45" stroke="#e2e8f0" stroke-width="3"/>
+    ${isDouble ? `<line x1="184" y1="32" x2="184" y2="45" stroke="#e2e8f0" stroke-width="3"/>` : ''}
+  </g>`;
+}
+
+// ============================================================================
+// CONSTRUCCIÓN DE LA ESCENA SEGÚN EL CIRCUITO ACTIVO
+// ============================================================================
+function renderScene() {
+  const root = document.getElementById('sceneRoot');
+  const cid = getEffectiveCircuitId();
+  let html = '';
+
+  // Unidad FRL en esquina inferior izquierda en todos los montajes
+  html += svgFRL(85, 480);
+
+  if (cid === 'c1') {
+    const isNA = (appMode === 'challenge' && currentId === 'r3' && state.challengeSelection === '32na');
+    html += `
+      <path id="pipe_main" d="M 462 338 L 462 210 L 366 210 L 366 145" class="pipe pipe-exhaust"/>
+      ${svgCylinder(false, 350, 100)}
+      ${svgValve32('v1', 450, 360, appMode === 'challenge' ? 'Ranura [ ? ] · Válvula 3/2' : 'Válvula 3/2 NC (V1)', isNA)}
+    `;
+  } else if (cid === 'c2' || cid === 'c3') {
+    let logicType = (cid === 'c2') ? 'or' : 'and';
+    if (appMode === 'challenge' && (currentId === 'r1' || currentId === 'r2')) {
+      logicType = state.challengeSelection;
+    }
+    html += `
+      <!-- Tuberías de V1 y V2 hacia la válvula lógica -->
+      <path id="pipe_v1" d="M 312 398 L 312 260 L 405 260" class="pipe pipe-exhaust"/>
+      <path id="pipe_v2" d="M 612 398 L 612 260 L 495 260" class="pipe pipe-exhaust"/>
+      <!-- Tubería salida lógica hacia CSE -->
+      <path id="pipe_out" d="M 450 238 L 450 185 L 366 185 L 366 145" class="pipe pipe-exhaust"/>
+      ${svgCylinder(false, 350, 100)}
+      ${svgLogicValve(logicType, 450, 260)}
+      ${svgValve32('v1', 300, 420, 'Válvula 3/2 (V1)')}
+      ${svgValve32('v2', 600, 420, 'Válvula 3/2 (V2)')}
+    `;
+  } else if (cid === 'c4') {
+    html += `
+      <!-- Línea pilotaje 14 desde V1 -->
+      <path id="pipe_pilot14" d="M 272 398 L 272 280 L 338 280" class="pipe pipe-exhaust"/>
+      <!-- Vía 4 hacia cámara posterior y Vía 2 hacia cámara anterior -->
+      <path id="pipe_work4" d="M 434 256 L 434 190 L 366 190 L 366 145" class="pipe pipe-exhaust"/>
+      <path id="pipe_work2" d="M 466 256 L 466 190 L 534 190 L 534 145" class="pipe pipe-pressure"/>
+      ${svgCylinder(true, 350, 100)}
+      ${svgValve52(450, 280, true)}
+      ${svgValve32('v1', 260, 420, 'Mando 3/2 (V1)')}
+    `;
+  } else if (cid === 'c5') {
+    const isMono = (appMode === 'challenge' && currentId === 'r4' && state.challengeSelection === '52mono');
+    html += `
+      <!-- Líneas de pilotaje 14 y 12 -->
+      <path id="pipe_pilot14" d="M 262 418 L 262 320 L 338 320" class="pipe pipe-exhaust"/>
+      ${!isMono ? `<path id="pipe_pilot12" d="M 662 418 L 662 320 L 498 320" class="pipe pipe-exhaust"/>` : ''}
+      <!-- Vía 4 hacia cámara posterior y Vía 2 hacia cámara anterior pasando por estranguladora -->
+      <path id="pipe_work4" d="M 434 296 L 434 185 L 366 185 L 366 145" class="pipe pipe-exhaust"/>
+      <path id="pipe_work2" d="M 466 296 L 466 260 L 534 260 L 534 145" class="pipe pipe-pressure"/>
+      ${svgCylinder(true, 350, 100)}
+      ${svgThrottleValve(544, 205)}
+      ${svgValve52(450, 320, isMono)}
+      ${svgValve32('v1', 250, 440, 'Marcha V1 (Pilotaje 14)')}
+      ${!isMono ? svgValve32('v2', 650, 440, 'Retorno V2 (Pilotaje 12)') : ''}
+    `;
+  } else if (cid === 'c6') {
+    html += `
+      <!-- V1 y V2 hacia válvula de simultaneidad AND -->
+      <path id="pipe_v1" d="M 192 438 L 192 365 L 225 365" class="pipe pipe-exhaust"/>
+      <path id="pipe_v2" d="M 352 438 L 352 365 L 315 365" class="pipe pipe-exhaust"/>
+      <!-- Salida AND hacia pilotaje 14 de la 5/2 -->
+      <path id="pipe_pilot14" d="M 270 343 L 270 310 L 368 310" class="pipe pipe-exhaust"/>
+      <!-- V3 hacia pilotaje 12 -->
+      <path id="pipe_pilot12" d="M 692 438 L 692 310 L 528 310" class="pipe pipe-exhaust"/>
+      <!-- Líneas de trabajo 4 y 2 -->
+      <path id="pipe_work4" d="M 464 286 L 464 185 L 366 185 L 366 145" class="pipe pipe-exhaust"/>
+      <path id="pipe_work2" d="M 496 286 L 496 255 L 534 255 L 534 145" class="pipe pipe-pressure"/>
+      ${svgCylinder(true, 350, 100)}
+      ${svgThrottleValve(544, 200)}
+      ${svgLogicValve('and', 270, 365)}
+      ${svgValve52(480, 310, false)}
+      ${svgValve32('v1', 180, 460, 'Mano Izq (V1)')}
+      ${svgValve32('v2', 340, 460, 'Mano Der (V2)')}
+      ${svgValve32('v3', 680, 460, 'Retorno (V3)')}
+    `;
+  }
+
+  root.innerHTML = html;
+}
+
+// ============================================================================
+// ACTUALIZACIÓN VISUAL DINÁMICA EN CADA FOTOGRAMA
+// ============================================================================
+function updateDynamicSVG(net) {
+  // 1. Desplazamiento físico de las casillas de las válvulas 3/2 (+44px al activarse)
+  ['v1', 'v2', 'v3'].forEach(k => {
+    const el = document.getElementById(`spool_${k}`);
+    if (el) {
+      el.style.transform = state[k] ? 'translateX(44px)' : 'translateX(0px)';
+    }
+  });
+
+  // 2. Desplazamiento físico de la válvula 5/2 (+64px al conmutar a posición 14)
+  const el52 = document.getElementById('spool_52');
+  if (el52) {
+    el52.style.transform = (state.spool52 === 1) ? 'translateX(64px)' : 'translateX(0px)';
+  }
+
+  // 3. Posición de la bola/corredera interna en válvulas OR y AND
+  const shuttle = document.getElementById('logicShuttle');
+  if (shuttle) {
+    if (net.pV1 && !net.pV2) shuttle.setAttribute('transform', 'translate(16, 0)');
+    else if (!net.pV1 && net.pV2) shuttle.setAttribute('transform', 'translate(-16, 0)');
+    else shuttle.setAttribute('transform', 'translate(0, 0)');
+  }
+
+  // 4. Coloreado y animación de tuberías según presión
+  setPipeState('pipe_main', net.pWork4, 'pressure');
+  setPipeState('pipe_v1', net.pV1, 'pressure');
+  setPipeState('pipe_v2', net.pV2, 'pressure');
+  setPipeState('pipe_out', net.pLogicOut, 'pressure');
+  setPipeState('pipe_pilot14', (net.cid === 'c6') ? net.pLogicOut : net.pV1, 'pilot');
+  setPipeState('pipe_pilot12', (net.cid === 'c6') ? net.pV3 : net.pV2, 'pilot');
+  setPipeState('pipe_work4', net.pWork4, 'pressure');
+  setPipeState('pipe_work2', net.pWork2, 'pressure');
+
+  // 5. Movimiento del émbolo, cámaras y compresión del muelle del cilindro
+  const maxTravel = 148;
+  const dx = state.cylPos * maxTravel;
+  const piston = document.getElementById('cylPistonGroup');
+  if (piston) piston.setAttribute('transform', `translate(${dx}, 0)`);
+
+  const backChamber = document.getElementById('cylChamberBack');
+  if (backChamber) {
+    backChamber.setAttribute('width', 20 + dx);
+    backChamber.setAttribute('fill', net.pWork4 ? '#ef4444' : '#38bdf8');
+  }
+
+  const frontChamber = document.getElementById('cylChamberFront');
+  if (frontChamber) {
+    frontChamber.setAttribute('x', 32 + dx);
+    frontChamber.setAttribute('width', Math.max(4, 166 - dx));
+    frontChamber.setAttribute('fill', net.pWork2 ? '#ef4444' : '#38bdf8');
+  }
+
+  // Dibujo dinámico del muelle comprimido en Cilindro de Simple Efecto
+  const spring = document.getElementById('cylSpring');
+  if (spring) {
+    const startX = 32 + dx;
+    const endX = 196;
+    const coils = 7;
+    const step = (endX - startX) / coils;
+    let d = `M ${startX} 0 `;
+    for (let i = 0; i < coils; i++) {
+      const x1 = startX + step * (i + 0.25);
+      const x2 = startX + step * (i + 0.75);
+      const x3 = startX + step * (i + 1);
+      d += `L ${x1.toFixed(1)} -18 L ${x2.toFixed(1)} 18 L ${x3.toFixed(1)} 0 `;
+    }
+    spring.setAttribute('d', d);
+  }
+
+  // 6. Indicadores numéricos del panel derecho
+  document.getElementById('cylPosLabel').textContent = `${Math.round(state.cylPos * 100)}%`;
+  document.getElementById('chamberBackLabel').textContent = net.pWork4 ? 'Con Presión (Vía 1)' : 'Escape (Vía 3/5)';
+  document.getElementById('chamberBackLabel').style.color = net.pWork4 ? '#ef4444' : '#38bdf8';
+
+  const isCDE = ['c4', 'c5', 'c6'].includes(net.cid);
+  document.getElementById('chamberFrontLabel').textContent = isCDE
+    ? (net.pWork2 ? 'Con Presión (Vía 2)' : 'Escape Estrangulado')
+    : 'Retorno por Muelle';
+}
+
+function setPipeState(id, isActive, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (isActive) {
+    el.setAttribute('class', `pipe pipe-${type}`);
+  } else {
+    el.setAttribute('class', 'pipe pipe-exhaust');
+  }
+}
+
+// ============================================================================
+// INTERACCIÓN CON LOS ACCIONAMIENTOS DE LAS VÁLVULAS
+// ============================================================================
+function handleValvePress(key, isDown) {
+  if (state.actuatorType === 'lever') {
+    // La palanca tiene enclavamiento: conmuta al hacer clic
+    if (isDown) state[key] = !state[key];
+  } else {
+    // Pulsador o rodillo: activo mientras se mantiene pulsado
+    state[key] = isDown;
+  }
+}
+
+// Evitar que una válvula se quede pulsada si el ratón sale fuera del botón
+window.addEventListener('mouseup', () => {
+  if (state.actuatorType !== 'lever') {
+    state.v1 = false;
+    state.v2 = false;
+    state.v3 = false;
+  }
+});
+
+init();
+</script>
+</body>
+</html>
